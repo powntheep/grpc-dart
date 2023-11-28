@@ -14,10 +14,11 @@
 // limitations under the License.
 
 import 'dart:async';
-import 'dart:html';
+import 'dart:js_interop';
 import 'dart:typed_data';
 
 import 'package:meta/meta.dart';
+import 'package:web/helpers.dart' as html;
 
 import '../../client/call.dart';
 import '../../shared/message.dart';
@@ -30,7 +31,7 @@ import 'web_streams.dart';
 const _contentTypeKey = 'Content-Type';
 
 class XhrTransportStream implements GrpcTransportStream {
-  final HttpRequest _request;
+  final html.XMLHttpRequest _request;
   final ErrorHandler _onError;
   final Function(XhrTransportStream stream) _onDone;
   bool _headersReceived = false;
@@ -49,26 +50,26 @@ class XhrTransportStream implements GrpcTransportStream {
       {required ErrorHandler onError, required onDone})
       : _onError = onError,
         _onDone = onDone {
-    _outgoingMessages.stream
-        .map(frame)
-        .listen((data) => _request.send(data), cancelOnError: true);
+    _outgoingMessages.stream.map(frame).listen((data) {
+      final bytes = data.jsify();
+      _request.send(bytes);
+    }, cancelOnError: true);
 
     _request.onReadyStateChange.listen((data) {
       if (_incomingProcessor.isClosed) {
         return;
       }
-      switch (_request.readyState) {
-        case HttpRequest.HEADERS_RECEIVED:
-          _onHeadersReceived();
-          break;
-        case HttpRequest.DONE:
-          _onRequestDone();
-          _close();
-          break;
+      if (_request.readyState == html.XMLHttpRequest.HEADERS_RECEIVED) {
+        _onHeadersReceived();
+        return;
+      } else if (_request.readyState == html.XMLHttpRequest.DONE) {
+        _onRequestDone();
+        _close();
+        return;
       }
     });
 
-    _request.onError.listen((ProgressEvent event) {
+    _request.onError.listen((html.ProgressEvent event) {
       if (_incomingProcessor.isClosed) {
         return;
       }
@@ -77,13 +78,13 @@ class XhrTransportStream implements GrpcTransportStream {
       terminate();
     });
 
-    _request.onProgress.listen((_) {
+    _request.onProgress.listen((html.ProgressEvent _) {
       if (_incomingProcessor.isClosed) {
         return;
       }
       // Use response over responseText as most browsers don't support
       // using responseText during an onProgress event.
-      final responseString = _request.response as String;
+      final responseString = _request.response.toString();
       final bytes = Uint8List.fromList(
               responseString.substring(_requestBytesRead).codeUnits)
           .buffer;
@@ -100,8 +101,9 @@ class XhrTransportStream implements GrpcTransportStream {
 
   bool _validateResponseState() {
     try {
-      validateHttpStatusAndContentType(
-          _request.status, _request.responseHeaders,
+      final headers = _request.responseHeaders;
+
+      validateHttpStatusAndContentType(_request.status, headers,
           rawResponse: _request.responseText);
       return true;
     } catch (e, st) {
@@ -115,7 +117,8 @@ class XhrTransportStream implements GrpcTransportStream {
     if (!_validateResponseState()) {
       return;
     }
-    _incomingMessages.add(GrpcMetadata(_request.responseHeaders));
+    final headers = _request.responseHeaders;
+    _incomingMessages.add(GrpcMetadata(headers));
   }
 
   void _onRequestDone() {
@@ -156,7 +159,8 @@ class XhrClientConnection implements ClientConnection {
   @override
   String get scheme => uri.scheme;
 
-  void _initializeRequest(HttpRequest request, Map<String, String> metadata) {
+  void _initializeRequest(
+      html.XMLHttpRequest request, Map<String, String> metadata) {
     for (final header in metadata.keys) {
       request.setRequestHeader(header, metadata[header]!);
     }
@@ -166,7 +170,7 @@ class XhrClientConnection implements ClientConnection {
   }
 
   @visibleForTesting
-  HttpRequest createHttpRequest() => HttpRequest();
+  html.XMLHttpRequest createHttpRequest() => html.XMLHttpRequest();
 
   @override
   GrpcTransportStream makeRequest(String path, Duration? timeout,
@@ -231,4 +235,34 @@ MapEntry<String, String>? _getContentTypeHeader(Map<String, String> metadata) {
     }
   }
   return null;
+}
+
+extension HeadersExt on html.XMLHttpRequest {
+  Map<String, String> get responseHeaders {
+    // from Closure's goog.net.Xhrio.getResponseHeaders.
+    final headers = <String, String>{};
+    final headersString = getAllResponseHeaders();
+    if (headersString == null) {
+      return headers;
+    }
+    final headersList = headersString.split('\r\n');
+    for (var header in headersList) {
+      if (header.isEmpty) {
+        continue;
+      }
+
+      final splitIdx = header.indexOf(': ');
+      if (splitIdx == -1) {
+        continue;
+      }
+      final key = header.substring(0, splitIdx).toLowerCase();
+      final value = header.substring(splitIdx + 2);
+      if (headers.containsKey(key)) {
+        headers[key] = '${headers[key]}, $value';
+      } else {
+        headers[key] = value;
+      }
+    }
+    return headers;
+  }
 }

@@ -399,6 +399,8 @@ class ClientCall<Q, R> implements Response {
   /// Handler for response errors. Forward the error to the [_responses] stream,
   /// wrapped if necessary.
   void _onResponseError(error, StackTrace stackTrace) {
+    print(error);
+    print(stackTrace);
     if (error is GrpcError) {
       _responseError(error, stackTrace);
       return;
@@ -437,6 +439,8 @@ class ClientCall<Q, R> implements Response {
   /// to send the request to the server. Abort the request, and forward the
   /// error to the user code on the [_responses] stream.
   void _onRequestError(error, StackTrace stackTrace) {
+    print(error);
+    print(stackTrace);
     if (error is! GrpcError) {
       error = GrpcError.unknown(error.toString());
     }

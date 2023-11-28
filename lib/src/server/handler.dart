@@ -334,6 +334,8 @@ class ServerHandler extends ServiceCall {
   }
 
   void _onResponseError(error, trace) {
+    print(error);
+    print(trace);
     if (error is GrpcError) {
       _sendError(error, trace);
     } else {
